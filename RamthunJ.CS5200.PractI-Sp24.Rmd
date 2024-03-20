@@ -1,0 +1,429 @@
+---
+title: "Analysis of Wildlife Strikes to Aircraft"
+subtitle: "Practicum I CS5200"
+author: "Joshua Ramthun"
+date: "Spring 2024"
+output: pdf_document
+---
+
+```{r connectionToMySQL, eval = T, warning = F, echo = F, results='hide'}
+# Question 3
+library(RMySQL)
+
+dbcon <- dbConnect(MySQL(),
+                   user = "admin",
+                   password = "adminpassword",
+                   dbname = "CS5200",
+                   host = "cs5200-database-spring24.crc2eimogqoh.us-east-1.rds.amazonaws.com")
+if (dbIsValid(dbcon)){
+  cat("Connected to MySQL Database .\n")
+} else {
+  cat("Failed to connect to MySQL Database .\n")
+}
+```
+
+```{r creatingTablesForDatabase, eval = T, warning = F, echo = F, results='hide'}
+# Question 4 A-F
+sql <- "CREATE TABLE IF NOT EXISTS airports (
+    aid INT AUTO_INCREMENT PRIMARY KEY,
+    airportName varchar(50) NOT NULL,
+    airportState VARCHAR(15) NOT NULL,
+    airportCode VARCHAR(3) NOT NULL DEFAULT 'ZZZ'
+);"
+
+dbExecute(dbcon, sql)
+
+sql <- "CREATE TABLE IF NOT EXISTS flights (
+	  fid INT AUTO_INCREMENT PRIMARY KEY,
+    date DATE NOT NULL,
+    originAirport INT NOT NULL,
+    airlineName varchar(100) NOT NULL,
+    aircraftType varchar(50) NOT NULL,
+    isHeavy bool NOT NULL,
+    FOREIGN KEY (originAirport) REFERENCES airports(aid)
+);"
+
+dbExecute(dbcon, sql)
+
+sql <- "CREATE TABLE IF NOT EXISTS conditions (
+    cid INT AUTO_INCREMENT PRIMARY KEY,
+    sky_condition varchar(50) NOT NULL,
+    explanation text NOT NULL
+);"
+
+dbExecute(dbcon, sql)
+
+sql <- "CREATE TABLE IF NOT EXISTS strikes (
+	  sid INT AUTO_INCREMENT PRIMARY KEY,
+    fid INT NOT NULL,
+    numbirds INT NOT NULL,
+    impact varchar(50) NOT NULL,
+    damage bool NOT NULL,
+    altitude INT NOT NULL CHECK (altitude >= 0),
+    conditions INT NOT NULL,
+    FOREIGN KEY (fid) REFERENCES flights(fid),
+    FOREIGN KEY (conditions) REFERENCES conditions(cid)
+);"
+
+dbExecute(dbcon, sql)
+```
+
+```{r testingTableAirports, eval = T, warning = F, echo = F, results='hide'}
+# Question 4G
+sql <- "INSERT INTO airports (aid,airportName, airportState)
+    VALUES (1,'Logan International', 'Massachussets')";
+
+dbExecute(dbcon, sql)
+
+sql <- "SELECT * FROM airports"
+result <- dbGetQuery(dbcon, sql)
+
+```
+
+
+```{r testingTableFlights, eval = T, warning = F, echo = F, results='hide'}
+# Question 4G
+sql <- "INSERT INTO flights (fid, date, originAirport, airlineName, aircraftType, isHeavy)
+VALUES (1, '2024-03-06', 1, 'Alaska Airlines', 'Airplane', false)"
+
+dbExecute(dbcon, sql)
+
+sql <- "SELECT * FROM flights"
+result <- dbGetQuery(dbcon, sql)
+```
+
+```{r testingTableConditions, eval = T, warning = F, echo = F, results='hide'}
+# Question 4G
+sql <- "INSERT INTO conditions (cid, sky_condition, explanation)
+VALUES (1,'Some Clouds', '')"
+
+dbExecute(dbcon, sql)
+
+sql <- "SELECT * FROM conditions"
+result <- dbGetQuery(dbcon, sql)
+```
+
+```{r testingTableStrikes, eval = T, warning = F, echo = F, results='hide'}
+# Question 4G
+sql <- "INSERT INTO strikes (sid, fid, numbirds, impact, damage, altitude, conditions)
+VALUES (1, 1, 23, 'total engine failure', true, 2500, 1)"
+
+dbExecute(dbcon, sql)
+
+sql <- "INSERT INTO strikes (sid, fid, numbirds, impact, damage, altitude, conditions)
+VALUES (1, 1, 23, 'total engine failure', true, -2500, 1)"
+
+# Note: this query will fail because of the negative altitude
+#dbExecute(dbcon, sql)
+
+sql<- "SELECT * FROM strikes"
+result <- dbGetQuery(dbcon, sql)
+```
+
+```{r deletingTests, eval = T, warning = F, echo = F, include = F}
+# Question 4G
+sql <- "DELETE FROM strikes"
+dbExecute(dbcon, sql)
+
+sql <- "DELETE FROM conditions"
+dbExecute(dbcon, sql)
+
+sql <- "DELETE FROM flights"
+dbExecute(dbcon, sql)
+
+sql <- "DELETE FROM airports"
+dbExecute(dbcon, sql)
+
+sql <- "SELECT * FROM airports "
+dbGetQuery(dbcon, sql)
+
+sql <- "SELECT * FROM flights"
+dbGetQuery(dbcon, sql)
+
+sql <- "SELECT * FROM conditions"
+dbGetQuery(dbcon, sql)
+
+sql <- "SELECT * FROM strikes"
+dbGetQuery(dbcon, sql)
+
+```
+
+# Upload data from csv
+```{r uploadDataFromCSV, eval = T, warning = F, echo = F, include = F}
+# Question 5
+bds.raw <- read.csv("./BirdStrikesData-V3.csv", header = T)
+
+head(bds.raw)
+```
+
+
+# Insert data in airports table
+```{r insertAirportsData, eval = T, warning = F, echo = F, include = F}
+# Question 6
+# Select all rows for columns
+data <- bds.raw[, c("airport", "origin")] 
+
+# Rename columns to match database
+colnames(data) <- c("airportName", "airportState")
+
+# Write to db
+dbWriteTable(dbcon, "airports", data, row.names = FALSE, append = TRUE)
+```
+
+# Insert data in flights table
+```{r insertFlightsData, eval = T, warning = F, echo = F, include = F}
+# Question 6
+# Read airports table to get aid we need to store in flights
+airports_data <- dbReadTable(dbcon, "airports")
+
+# Create a column called originAirport such that it stores aid form airports table
+# where airport column in csv matches airportName in airport table
+bds.raw$originAirport <- airports_data$aid[match(bds.raw$airport, airports_data$airportName)]
+
+# Set the date to sentinel value if it is missing
+bds.raw$flight_date[is.na(bds.raw$flight_date) | bds.raw$flight_date == ""] <- "01/01/1970 00:00"
+
+# Select all rows for columns
+data <- bds.raw[, c("flight_date", "originAirport", "airline","aircraft", "heavy_flag")]
+# Convert heavy_flag to boolean
+data$heavy_flag <- as.integer(as.logical(bds.raw$heavy_flag == "Yes"))
+
+# Converting date to a supported date type
+data$flight_date <- as.Date(data$flight_date, format = "%m/%d/%Y %H:%M")
+data$flight_date <- format(data$flight_date, "%Y-%m-%d")
+
+
+# Rename columns to match database
+colnames(data) <- c("date", "originAirport", "airlineName", "aircraftType", "isHeavy")
+
+#Write to db
+dbWriteTable(dbcon, "flights", data, row.names = FALSE, append = TRUE)
+
+```
+
+# Insert data in conditions table
+```{r insertConditionsData, eval = T, warning = F, echo = F, include = F}
+# Question 6
+# Select unique sky_conditions values
+unique_sky_conditions <- unique(bds.raw$sky_conditions)
+
+
+# Create a dataframe for the conditions lookup table
+data <- data.frame(sky_condition = unique_sky_conditions,explanation = "")
+
+# Rename columns to match database
+colnames(data) <- c("sky_condition", "explanation")
+
+dbWriteTable(dbcon, "conditions", data, row.names = FALSE, append = TRUE)
+```
+
+# Insert data in strikes table
+```{r insertStrikesData, eval = T, warning = F, echo = F, include = F}
+# Question 6
+#_______________________________________________________________________________
+# Figuring out rid
+#_______________________________________________________________________________
+# Read flights table to get fid we need to store in strikes
+flights_data <- dbReadTable(dbcon, "flights")
+
+# Create a synthetic key for flights
+flights_data$date <- as.Date(flights_data$date)
+flights_data$synthetic_key <- paste(
+  format(flights_data$date, "%Y-%m-%d"),
+  flights_data$airlineName,
+  flights_data$aircraftType,
+  sep="_"
+)
+
+# Convert csv file flight_date to date
+bds.raw$flight_date <- as.Date(bds.raw$flight_date, format="%m/%d/%Y %H:%M")
+
+# Create a synthetic key for csv file
+bds.raw$synthetic_key <- paste(
+  format(bds.raw$flight_date, "%Y-%m-%d"),
+  bds.raw$airline,
+  bds.raw$aircraft,
+  sep="_"
+)
+
+# Match the synthetic keys to get fid
+bds.raw$fid <- flights_data$fid[match(bds.raw$synthetic_key, flights_data$synthetic_key)]
+#_______________________________________________________________________________
+# Figuring out cid
+#_______________________________________________________________________________
+# Read conditions table to get cid we need to store in strikes in coditions column
+conditions_data <- dbReadTable(dbcon, "conditions")
+
+# Create a new column cid in csv to match cid in conditions
+bds.raw$cid <- conditions_data$cid[match(bds.raw$sky_conditions, conditions_data$sky_condition)]
+#_______________________________________________________________________________
+
+# Missing info about numbirds so setting it to default value of 0
+bds.raw$numbirds <- 0
+
+# Convert damage to 0/1
+bds.raw$damage_bool <- as.integer(ifelse(bds.raw$damage %in% c("Loss", "Damage"), TRUE, FALSE))
+
+# Convert altitude to numeric value
+bds.raw$altitude_ft_no_commas <- gsub(",", "", bds.raw$altitude_ft, fixed = TRUE)
+bds.raw$altitude_int <- as.integer(bds.raw$altitude_ft_no_commas)
+
+
+# Select relevant columns
+data <- bds.raw[, c("fid", "numbirds", "impact", "damage_bool", "altitude_int", "cid")]
+
+# Rename columns to match the database
+colnames(data) <- c("fid", "numbirds", "impact", "damage", "altitude", "conditions")
+
+dbWriteTable(dbcon, "strikes", data, row.names = FALSE, append = TRUE)
+```
+
+# Show that data was uploaded to tables
+```{r showData, eval = T, warning = F, echo = F, include = F}
+# Question 7
+# Query to select the first 5 entries from the airports table
+airport_query <- "SELECT * FROM airports LIMIT 5"
+airport_result <- dbGetQuery(dbcon, airport_query)
+print(airport_result)
+
+# Query to select the first 5 entries from the conditions table
+conditions_query <- "SELECT * FROM conditions LIMIT 5"
+conditions_result <- dbGetQuery(dbcon, conditions_query)
+print(conditions_result)
+
+# Query to select the first 5 entries from the strikes table
+strikes_query <- "SELECT * FROM strikes LIMIT 5"
+strikes_result <- dbGetQuery(dbcon, strikes_query)
+print(strikes_result)
+
+# Query to select the first 5 entries from the flights table
+flights_query <- "SELECT * FROM flights LIMIT 5"
+flights_result <- dbGetQuery(dbcon, flights_query)
+print(flights_result)
+```
+
+## Top Airports with Strikes
+```{sql topAirportsWithStrikes, connection=dbcon,eval = T, warning = F, echo = F}
+-- Question 8
+SELECT airportState as state, COUNT(sid) AS NumberOfIncidents FROM strikes
+JOIN flights ON strikes.fid = flights.fid
+JOIN airports ON flights.originAirport = airports.aid
+GROUP BY airports.airportState
+ORDER BY NumberOfIncidents DESC
+LIMIT 10;
+```
+
+## Analysis by Airline
+```{sql analysisByAirline, connection=dbcon,eval = T, warning = F, echo = F}
+-- Question 9
+SELECT airlineName
+FROM strikes
+JOIN flights ON strikes.fid = flights.fid
+GROUP BY flights.airlineName
+HAVING COUNT(strikes.sid) > (SELECT AVG(num_incidents) FROM (
+    SELECT COUNT(strikes.sid) AS num_incidents
+    FROM strikes
+    JOIN flights ON strikes.fid = flights.fid
+    GROUP BY flights.airlineName
+) AS AirlineIncidents);
+```
+
+## Analysis by Month
+```{r analysisByMonth, eval = T, warning = F, echo = F}
+# Question 10
+query <- "
+SELECT MONTH(date) AS Month, COUNT(*) AS Number_of_Strikes
+FROM strikes
+JOIN flights ON strikes.fid = flights.fid
+GROUP BY Month
+ORDER BY Number_of_Strikes DESC;"
+
+result_df <- dbGetQuery(dbcon, query)
+head(result_df, n = 6)
+```
+
+## Trend by Month
+```{r trendByMonth, eval = T, warning = F, echo = F}
+# Question 11
+# Plot the vertical column chart
+plot(
+  result_df$Month,
+  result_df$Number_of_Strikes,
+  type = "h",  
+  lwd = 5,    
+  col = "NavyBlue",
+  xlab = "Month",
+  ylab = "Number of Strikes",
+  main = "Monthly Strikes",
+  ylim = c(0, max(result_df$Number_of_Strikes) + 1000)  
+)
+
+# Labels
+text(
+  result_df$Month,
+  result_df$Number_of_Strikes,
+  labels = result_df$Number_of_Strikes,
+  pos = 3,  
+  col = "red"
+)
+
+legend(
+  "topright",
+  legend = paste("Number of Strikes"),
+  fill = "navyblue"
+)
+```
+
+## Remove a Strike
+```{sql createAuditLog, connection=dbcon,eval = T, warning = F, echo = F, include = F}
+-- Question 12
+CREATE TABLE IF NOT EXISTS audit_log (
+    log_id INT AUTO_INCREMENT PRIMARY KEY NOT NULL,
+    modification_type VARCHAR(50) NOT NULL,
+    table_name VARCHAR(50) NOT NULL,
+    time DATETIME NOT NULL,
+    primary_key INT NOT NULL
+);
+```
+
+```{sql createProcedure, connection=dbcon,eval = T, warning = F, echo = F, include = F}
+CREATE PROCEDURE IF NOT EXISTS remove_from_strike(IN strike_id INT)
+BEGIN
+    -- Delete the strike from the strikes table
+    DELETE FROM strikes WHERE strikes.sid = strike_id;
+    
+    -- Insert into audit log
+    INSERT INTO audit_log (modification_type, table_name, time, primary_key)
+    VALUES ('Removal', 'strikes', NOW(), strike_id);
+END;
+```
+
+```{sql insertDummy, connection=dbcon,eval = T, warning = F, echo = F, include = F}
+# Insert dummy value that we will delete so that we know for sure sid exists
+INSERT INTO strikes (sid, fid, numbirds, impact, damage, altitude, conditions)
+VALUES (123456789, 2, 0, 'None', 1, 30000, 2);
+```
+
+
+```{r callProcedure, eval = T, warning = F, echo = F, include = F}
+dbSendQuery(dbcon, "CALL remove_from_strike(123456789)")
+
+# Confirm strike has been removed
+strikeRemoved <- dbGetQuery(dbcon, "SELECT * FROM strikes WHERE sid = 123456789")
+if (nrow(strikeRemoved) == 0) {
+  audit_log <- dbGetQuery(dbcon, "SELECT * FROM audit_log")
+} else {
+  print("Error during strike removal.")
+}
+```
+
+```{r printAuditLog, eval = T, warning = F, echo = F}
+# Check the audit log
+print(audit_log)
+```
+
+
+```{r disconnectDB, eval = T, warning = F, echo = F, include = F}
+dbDisconnect(dbcon)
+```
+
